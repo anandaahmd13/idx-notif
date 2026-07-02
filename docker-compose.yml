@@ -1,0 +1,17 @@
+services:
+  idxbot:
+    build: .
+    container_name: idx-alert-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Persist dedupe state across restarts so old announcements don't re-alert.
+      - ./data:/app/data
+      # Live-edit filters/keywords without rebuilding the image.
+      - ./config.yaml:/app/config.yaml:ro
+    environment:
+      # Keep seen.json on the mounted volume.
+      - IDX_SEEN_PATH=/app/data/seen.json
+    # Chromium needs a bit of shared memory even with --disable-dev-shm-usage.
+    shm_size: "512mb"

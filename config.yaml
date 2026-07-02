@@ -1,0 +1,73 @@
+# IDX Alert Bot configuration
+# Copy/edit this file; secrets go in .env, not here.
+
+poll:
+  # Interval polling SAAT jam bursa buka (detik). Cepat = reaksi cepat.
+  market_interval_seconds: 5
+  # Interval polling DI LUAR jam bursa (detik). Lambat = hemat & aman.
+  off_interval_seconds: 300
+  # How many announcements to pull per poll (newest first).
+  page_size: 20
+  # Language of the IDX feed: "id" or "en".
+  lang: id
+
+schedule:
+  # Bursa Indonesia = WIB (UTC+7), tidak ada DST.
+  utc_offset_hours: 7
+  # Jendela jam bursa (waktu WIB). Di luar jendela ini polling melambat.
+  market_open: "08:45"
+  market_close: "15:00"
+  # Hari aktif: 0=Senin ... 6=Minggu. Default Senin-Jumat.
+  weekdays: [0, 1, 2, 3, 4]
+
+filter:
+  # Case-insensitive substring match against the announcement subject/title.
+  # An announcement alerts if ANY keyword matches. Empty list = match all.
+  keywords:
+    # --- Penambahan/pengurangan modal ---
+    - "Penambahan Modal"
+    - "HMETD"                 # rights issue
+    - "Tanpa HMETD"           # private placement / PMTHMETD
+    - "PMHMETD"
+    - "PMTHMETD"
+    - "Pengurangan Modal"
+    # --- Buyback ---
+    - "Pembelian Kembali"
+    - "Buyback"
+    - "Pengalihan Kembali"    # pengalihan saham hasil buyback
+    # --- Dividen ---
+    - "Dividen"
+    # --- Saham: split / bonus / konversi ---
+    - "Stock Split"
+    - "Pemecahan Saham"
+    - "Penggabungan Saham"    # reverse stock split
+    - "Reverse Stock"
+    - "Saham Bonus"
+    - "Waran"
+    - "Obligasi Konversi"
+    # --- Merger / akuisisi / restrukturisasi ---
+    - "Penggabungan Usaha"    # merger
+    - "Peleburan Usaha"
+    - "Pengambilalihan"       # akuisisi
+    - "Akuisisi"
+    - "Divestasi"
+    # --- Penawaran & keterbukaan ---
+    - "Penawaran Tender"
+    - "Tender Offer"
+    - "Aksi Korporasi"        # banyak judul memang memuat frasa ini
+    - "Keterbukaan Informasi"
+    # --- RUPS ---
+    - "RUPS"                  # catatan: sering muncul, bisa jadi banyak notif
+  # Optional ticker whitelist. Empty list = all emiten allowed.
+  # If set, an announcement must match a keyword AND be from one of these tickers.
+  emiten: []
+
+telegram:
+  # Which keyword label to show in the alert header (cosmetic).
+  channel_title: "Alert IDX Channel"
+
+download:
+  # Download the announcement PDF and attach it to the Telegram message.
+  attach_pdf: true
+  # Skip PDFs larger than this (bytes) to avoid Telegram's 50MB limit / spam.
+  max_pdf_bytes: 20971520

@@ -1,0 +1,6 @@
+# playwright 1.44 pins an old greenlet with no wheel for Python 3.13+, so it
+# fails to build there. Use a modern release that ships 3.13/3.14 wheels.
+playwright>=1.55,<2
+requests==2.32.3
+PyYAML==6.0.1
+python-dotenv==1.0.1
