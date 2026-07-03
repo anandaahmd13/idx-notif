@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="id" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IDX Alert Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        fontFamily: {
+          sans: ['"Fira Sans"', 'system-ui', 'sans-serif'],
+          mono: ['"Fira Code"', 'ui-monospace', 'monospace'],
+        },
+        colors: {
+          // Dark OLED + biru data + aksen amber (dari design system).
+          bg:      '#000000',
+          surface: '#0B0F1A',
+          card:    '#121826',
+          border:  '#1E293B',
+          primary: '#3B82F6',
+          accent:  '#D97706',
+          ok:      '#16A34A',
+          bad:     '#DC2626',
+          fg:      '#E5EDF7',
+          muted:   '#94A3B8',
+        },
+      },
+    },
+  };
+</script>
+<style>
+  /* Hormati preferensi reduced-motion: matikan animasi non-esensial. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+  @keyframes flash-in {
+    from { background-color: rgba(217, 119, 6, 0.18); }
+    to   { background-color: transparent; }
+  }
+  .flash { animation: flash-in 1.2s ease-out; }
+  @keyframes pulse-dot { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .live-dot { animation: pulse-dot 1.8s ease-in-out infinite; }
+  /* Focus ring terlihat untuk navigasi keyboard (aksesibilitas). */
+  a:focus-visible, button:focus-visible {
+    outline: 2px solid #3B82F6; outline-offset: 2px; border-radius: 4px;
+  }
+  html { scrollbar-color: #1E293B #000; }
+</style>
+</head>
+<body class="bg-bg text-fg font-sans min-h-dvh antialiased">
+  <div class="mx-auto max-w-6xl px-4 py-6 sm:px-6">
+
+    <!-- Header -->
+    <header class="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-4">
+      <div class="flex items-center gap-3">
+        <!-- SVG icon (Lucide bell), bukan emoji -->
+        <svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24"
+             fill="none" stroke="#3B82F6" stroke-width="2" stroke-linecap="round"
+             stroke-linejoin="round" aria-hidden="true">
+          <path d="M10.268 21a2 2 0 0 0 3.464 0"/>
+          <path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/>
+        </svg>
+        <div>
+          <h1 class="text-lg font-semibold leading-tight">IDX Alert Dashboard</h1>
+          <p class="text-xs text-muted font-mono" id="channel">__CHANNEL_TITLE__</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 text-sm">
+        <span id="health-dot" class="live-dot inline-block h-2.5 w-2.5 rounded-full bg-muted" aria-hidden="true"></span>
+        <span id="health-text" class="font-mono text-muted" role="status" aria-live="polite">menghubungkan…</span>
+      </div>
+    </header>
+
+    <!-- Stat tiles -->
+    <section class="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4" aria-label="Ringkasan statistik">
+      <div class="rounded-xl border border-border bg-card p-4">
+        <p class="text-xs uppercase tracking-wide text-muted">Total Alert</p>
+        <p id="s-total" class="mt-1 font-mono text-2xl font-semibold tabular-nums">–</p>
+      </div>
+      <div class="rounded-xl border border-border bg-card p-4">
+        <p class="text-xs uppercase tracking-wide text-muted">Uptime</p>
+        <p id="s-uptime" class="mt-1 font-mono text-2xl font-semibold tabular-nums">–</p>
+      </div>
+      <div class="rounded-xl border border-border bg-card p-4">
+        <p class="text-xs uppercase tracking-wide text-muted">Interval Poll</p>
+        <p id="s-interval" class="mt-1 font-mono text-2xl font-semibold tabular-nums">–</p>
+      </div>
+      <div class="rounded-xl border border-border bg-card p-4">
+        <p class="text-xs uppercase tracking-wide text-muted">Kegagalan</p>
+        <p id="s-fail" class="mt-1 font-mono text-2xl font-semibold tabular-nums">–</p>
+      </div>
+    </section>
+
+    <!-- Charts -->
+    <section class="mt-6 grid gap-4 lg:grid-cols-2" aria-label="Grafik">
+      <div class="rounded-xl border border-border bg-card p-4">
+        <h2 class="text-sm font-medium text-muted">Alert per hari (14 hari)</h2>
+        <div class="mt-3 h-48"><canvas id="chart-day" aria-label="Grafik alert per hari"></canvas></div>
+      </div>
+      <div class="rounded-xl border border-border bg-card p-4">
+        <h2 class="text-sm font-medium text-muted">Top emiten</h2>
+        <div class="mt-3 h-48"><canvas id="chart-emiten" aria-label="Grafik top emiten"></canvas></div>
+      </div>
+    </section>
+
+    <!-- Live feed -->
+    <section class="mt-6" aria-label="Feed pengumuman">
+      <div class="mb-2 flex items-center justify-between">
+        <h2 class="text-sm font-medium text-muted">Feed langsung</h2>
+        <span class="font-mono text-xs text-muted">terbaru dulu</span>
+      </div>
+      <ul id="feed" class="space-y-2">
+        <li id="feed-empty" class="rounded-xl border border-dashed border-border bg-surface p-6 text-center text-sm text-muted">
+          Belum ada alert. Pengumuman baru akan muncul di sini secara langsung.
+        </li>
+      </ul>
+    </section>
+
+    <footer class="mt-8 border-t border-border pt-4 text-center text-xs text-muted font-mono">
+      Realtime via SSE · data historis dari SQLite
+    </footer>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; };
+
+  function fmtUptime(sec) {
+    if (sec == null) return "–";
+    const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+    if (d > 0) return `${d}h ${h}j`;
+    if (h > 0) return `${h}j ${m}m`;
+    return `${m}m`;
+  }
+
+  // -- charts (Chart.js) ----------------------------------------------------
+  const gridColor = "#1E293B", tickColor = "#94A3B8";
+  let dayChart, emitenChart;
+
+  function initCharts() {
+    const dayCtx = $("chart-day").getContext("2d");
+    dayChart = new Chart(dayCtx, {
+      type: "line",
+      data: { labels: [], datasets: [{
+        data: [], borderColor: "#3B82F6", backgroundColor: "rgba(59,130,246,0.15)",
+        fill: true, tension: 0.3, pointRadius: 2, borderWidth: 2,
+      }]},
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { grid: { color: gridColor }, ticks: { color: tickColor, font: { family: "Fira Code" } } },
+          y: { grid: { color: gridColor }, ticks: { color: tickColor, precision: 0, font: { family: "Fira Code" } }, beginAtZero: true },
+        },
+      },
+    });
+    const emCtx = $("chart-emiten").getContext("2d");
+    emitenChart = new Chart(emCtx, {
+      type: "bar",
+      data: { labels: [], datasets: [{ data: [], backgroundColor: "#D97706", borderRadius: 4 }] },
+      options: {
+        responsive: true, maintainAspectRatio: false, indexAxis: "y",
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { grid: { color: gridColor }, ticks: { color: tickColor, precision: 0, font: { family: "Fira Code" } }, beginAtZero: true },
+          y: { grid: { display: false }, ticks: { color: tickColor, font: { family: "Fira Code" } } },
+        },
+      },
+    });
+  }
+
+  async function loadCharts() {
+    try {
+      const r = await fetch("/api/charts", { cache: "no-store" });
+      if (!r.ok) return;
+      const d = await r.json();
+      dayChart.data.labels = (d.per_day || []).map((x) => x.day.slice(5));
+      dayChart.data.datasets[0].data = (d.per_day || []).map((x) => x.n);
+      dayChart.update();
+      emitenChart.data.labels = (d.top_emiten || []).map((x) => x.emiten);
+      emitenChart.data.datasets[0].data = (d.top_emiten || []).map((x) => x.n);
+      emitenChart.update();
+    } catch (e) { /* diam: chart opsional */ }
+  }
+
+  // -- feed -----------------------------------------------------------------
+  function feedItem(a, isNew) {
+    const li = document.createElement("li");
+    li.className = "rounded-xl border border-border bg-card p-3" + (isNew ? " flash" : "");
+    const kw = a.keyword ? `<span class="rounded bg-primary/15 px-2 py-0.5 text-xs font-medium text-primary">${esc(a.keyword)}</span>` : "";
+    const link = a.link ? `<a href="${esc(a.link)}" target="_blank" rel="noopener"
+        class="mt-1 inline-block break-all text-xs text-primary hover:underline">${esc(a.link)}</a>` : "";
+    li.innerHTML = `
+      <div class="flex items-center justify-between gap-2">
+        <span class="font-mono text-sm font-semibold text-accent">${esc(a.emiten || "–")}</span>
+        <span class="font-mono text-xs text-muted tabular-nums">${esc(a.published || "")}</span>
+      </div>
+      <p class="mt-1 text-sm leading-snug">${esc(a.title || "")}</p>
+      <div class="mt-1 flex flex-wrap items-center gap-2">${kw}${link}</div>`;
+    return li;
+  }
+
+  function renderFeed(alerts) {
+    const feed = $("feed");
+    feed.innerHTML = "";
+    if (!alerts.length) {
+      const li = document.createElement("li");
+      li.id = "feed-empty";
+      li.className = "rounded-xl border border-dashed border-border bg-surface p-6 text-center text-sm text-muted";
+      li.textContent = "Belum ada alert. Pengumuman baru akan muncul di sini secara langsung.";
+      feed.appendChild(li);
+      return;
+    }
+    alerts.forEach((a) => feed.appendChild(feedItem(a, false)));
+  }
+
+  function prependAlert(a) {
+    const feed = $("feed");
+    const empty = $("feed-empty");
+    if (empty) empty.remove();
+    feed.insertBefore(feedItem(a, true), feed.firstChild);
+    while (feed.children.length > 100) feed.removeChild(feed.lastChild);
+  }
+
+  async function loadFeed() {
+    try {
+      const r = await fetch("/api/alerts", { cache: "no-store" });
+      if (!r.ok) return;
+      const d = await r.json();
+      renderFeed(d.alerts || []);
+    } catch (e) { /* diam */ }
+  }
+
+  // -- status ---------------------------------------------------------------
+  function applyStatus(s) {
+    $("s-total").textContent = s.total_recorded ?? s.total_alerts ?? "–";
+    $("s-uptime").textContent = fmtUptime(s.uptime_seconds);
+    $("s-interval").textContent = s.current_interval_seconds != null ? s.current_interval_seconds + "s" : "–";
+    $("s-fail").textContent = s.consecutive_failures ?? "–";
+    const dot = $("health-dot"), txt = $("health-text");
+    if (s.healthy) { dot.className = "live-dot inline-block h-2.5 w-2.5 rounded-full bg-ok"; txt.textContent = "sehat"; txt.className = "font-mono text-ok"; }
+    else { dot.className = "inline-block h-2.5 w-2.5 rounded-full bg-bad"; txt.textContent = "bermasalah"; txt.className = "font-mono text-bad"; }
+  }
+
+  async function loadStatus() {
+    try {
+      const r = await fetch("/api/status", { cache: "no-store" });
+      if (!r.ok) return;
+      applyStatus(await r.json());
+    } catch (e) {
+      $("health-text").textContent = "tak terhubung";
+      $("health-text").className = "font-mono text-bad";
+    }
+  }
+
+  // -- SSE (push realtime) --------------------------------------------------
+  function connectSSE() {
+    const es = new EventSource("/events");
+    es.addEventListener("alert", (ev) => {
+      try {
+        const a = JSON.parse(ev.data);
+        prependAlert(a);
+        loadStatus();   // segarkan tile
+        loadCharts();   // segarkan agregasi
+      } catch (e) { /* abaikan frame rusak */ }
+    });
+    es.onerror = () => {
+      // EventSource auto-reconnect; tandai sementara.
+      $("health-text").textContent = "menyambung ulang…";
+      $("health-text").className = "font-mono text-muted";
+    };
+  }
+
+  // -- boot -----------------------------------------------------------------
+  initCharts();
+  loadStatus();
+  loadFeed();
+  loadCharts();
+  connectSSE();
+  setInterval(loadStatus, 10000);  // fallback polling status (SSE tetap utama)
+})();
+</script>
+</body>
+</html>

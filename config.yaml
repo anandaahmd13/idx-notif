@@ -4,10 +4,12 @@
 poll:
   # Interval polling SAAT jam bursa buka (detik). Cepat = reaksi cepat.
   market_interval_seconds: 5
-  # Interval polling DI LUAR jam bursa (detik). Lambat = hemat & aman.
-  off_interval_seconds: 300
-  # How many announcements to pull per poll (newest first).
-  page_size: 20
+  # Interval polling DI LUAR jam bursa (detik). Dipakai HANYA bila
+  # schedule.always_open = false. Dengan always_open=true nilai ini diabaikan.
+  off_interval_seconds: 60
+  # Berapa pengumuman diambil per poll (terbaru dulu). Beri ruang lebih agar
+  # burst pengumuman tidak menggeser item keluar jendela sebelum sempat terlihat.
+  page_size: 50
   # Language of the IDX feed: "id" or "en".
   lang: id
 
@@ -19,6 +21,9 @@ schedule:
   market_close: "15:00"
   # Hari aktif: 0=Senin ... 6=Minggu. Default Senin-Jumat.
   weekdays: [0, 1, 2, 3, 4]
+  # Realtime 24 jam: abaikan jendela & hari bursa, selalu polling cepat
+  # (market_interval_seconds). Set false untuk kembali hemat di luar jam bursa.
+  always_open: true
 
 filter:
   # Case-insensitive substring match against the announcement subject/title.
@@ -61,6 +66,11 @@ filter:
   # Optional ticker whitelist. Empty list = all emiten allowed.
   # If set, an announcement must match a keyword AND be from one of these tickers.
   emiten: []
+  # Gerbang kesegaran (menit): "realtime seperti web". Hanya alert pengumuman
+  # yang terbit dalam rentang ini dari sekarang. Backlog lama (mis. saat bot
+  # baru dinyalakan setelah mati) dilewati diam-diam, tidak membanjiri channel.
+  # 0 = mati (kirim semua yang terlewat). 60 = hanya 1 jam terakhir.
+  max_age_minutes: 60
 
 telegram:
   # Which keyword label to show in the alert header (cosmetic).
@@ -71,3 +81,26 @@ download:
   attach_pdf: true
   # Skip PDFs larger than this (bytes) to avoid Telegram's 50MB limit / spam.
   max_pdf_bytes: 20971520
+
+web:
+  # Halaman status/monitoring (uptime, poll terakhir, alert terkirim, error).
+  # Default mati. Aktifkan untuk memantau kesehatan bot dari browser.
+  enabled: false
+  # Di VPS publik biarkan 127.0.0.1 lalu akses via SSH tunnel — halaman ini
+  # TANPA autentikasi. Pakai 0.0.0.0 hanya bila di belakang firewall.
+  host: "127.0.0.1"
+  port: 8080
+
+dashboard:
+  # Dashboard FastAPI: feed pengumuman realtime (SSE) + chart historis.
+  # Jalankan via `python -m idxbot.app` (proses TERPISAH dari `python -m idxbot`).
+  # Menjalankan poll loop-nya sendiri + menyimpan riwayat ke SQLite.
+  enabled: false
+  # 127.0.0.1 = akses via SSH tunnel. Untuk bind publik (0.0.0.0), WAJIB set
+  # DASHBOARD_USER + DASHBOARD_PASS di .env atau app menolak start.
+  host: "127.0.0.1"
+  port: 8000
+  # Berkas SQLite riwayat (di volume ./data agar persisten).
+  db_path: "data/history.db"
+  # Berapa alert terbaru ditampilkan di feed saat halaman dibuka.
+  recent_limit: 50

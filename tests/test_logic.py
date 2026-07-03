@@ -303,7 +303,14 @@ def test_legacy_seen_file_has_no_high_water(tmp_path):
 
 
 # -- config validation ------------------------------------------------------
-from idxbot.config import Config, ConfigError, PollConfig, ScheduleConfig
+from idxbot.config import (
+    Config,
+    ConfigError,
+    DashboardConfig,
+    PollConfig,
+    ScheduleConfig,
+    WebConfig,
+)
 
 
 def _valid_config(**overrides):
@@ -313,6 +320,8 @@ def _valid_config(**overrides):
         filter=FilterConfig(),
         telegram=TelegramConfig(bot_token="99:token", chat_id="-100123"),
         download=DownloadConfig(),
+        web=WebConfig(),
+        dashboard=DashboardConfig(),
     )
     base.update(overrides)
     return Config(**base)
@@ -334,6 +343,12 @@ def test_validate_accepts_sane_defaults():
         {"schedule": ScheduleConfig(weekdays=[7])},
         {"schedule": ScheduleConfig(market_open="15:00", market_close="08:45")},
         {"schedule": ScheduleConfig(utc_offset_hours=99)},
+        {"web": WebConfig(port=0)},
+        {"web": WebConfig(port=70000)},
+        {"dashboard": DashboardConfig(port=0)},
+        {"dashboard": DashboardConfig(port=99999)},
+        {"dashboard": DashboardConfig(recent_limit=0)},
+        {"filter": FilterConfig(max_age_minutes=-1)},
     ],
 )
 def test_validate_rejects_bad_values(overrides):
@@ -388,3 +403,237 @@ def test_market_boundary_open_inclusive_close_exclusive():
     s = _sched()
     assert s.is_market_open(datetime(2026, 7, 1, 8, 45, 0))  # tepat buka -> masuk
     assert not s.is_market_open(datetime(2026, 7, 1, 15, 0, 0))  # tepat tutup -> keluar
+
+
+def test_always_open_ignores_window_and_weekend():
+    """always_open=true -> selalu 'buka' & selalu interval cepat, 24 jam."""
+    s = MarketSchedule(
+        ScheduleConfig(
+            utc_offset_hours=7,
+            market_open="08:45",
+            market_close="15:00",
+            weekdays=[0, 1, 2, 3, 4],
+            always_open=True,
+        ),
+        PollConfig(market_interval_seconds=5, off_interval_seconds=300),
+    )
+    # Tengah malam hari Minggu -> normalnya tutup, tapi always_open menang.
+    assert s.is_market_open(datetime(2026, 7, 5, 3, 0, 0))
+    assert s.current_interval(datetime(2026, 7, 5, 3, 0, 0)) == 5
+
+
+# -- bot stats (halaman monitoring) -----------------------------------------
+from idxbot.stats import BotStats
+
+
+def test_stats_snapshot_is_json_serializable():
+    st = BotStats()
+    st.mark_poll_start()
+    st.mark_poll_success()
+    st.add_alerts(2)
+    st.set_schedule(True, 5)
+    st.set_retry_queue_size(1)
+    snap = st.snapshot()
+    # Harus bisa di-serialize tanpa error (dipakai endpoint /api/status).
+    json.dumps(snap)
+    assert snap["poll_count"] == 1
+    assert snap["total_alerts"] == 2
+    assert snap["current_interval_seconds"] == 5
+    assert snap["retry_queue_size"] == 1
+    assert snap["market_open"] is True
+
+
+def test_stats_add_alerts_ignores_nonpositive():
+    st = BotStats()
+    st.add_alerts(0)
+    st.add_alerts(-3)
+    assert st.snapshot()["total_alerts"] == 0
+
+
+def test_stats_unhealthy_after_three_failures():
+    st = BotStats()
+    for _ in range(3):
+        st.mark_poll_failure("boom")
+    assert st.is_healthy() is False
+    assert st.snapshot()["healthy"] is False
+
+
+def test_stats_success_resets_failures():
+    st = BotStats()
+    st.mark_poll_failure("boom")
+    st.mark_poll_failure("boom")
+    st.mark_poll_success()
+    snap = st.snapshot()
+    assert snap["consecutive_failures"] == 0
+    assert snap["healthy"] is True
+
+
+def test_stats_stale_success_is_unhealthy():
+    """Sukses terakhir jauh melampaui 3x interval -> dianggap tidak sehat."""
+    from datetime import timedelta, timezone as _tz
+
+    st = BotStats()
+    st.set_schedule(True, 5)  # interval 5s -> ambang sehat ~30s
+    st.mark_poll_success()
+    future = datetime.now(_tz.utc) + timedelta(seconds=120)
+    assert st.is_healthy(now=future) is False
+
+
+# -- history store (dashboard SQLite) ---------------------------------------
+from idxbot.db import HistoryStore
+
+
+def _rec(store, emiten="PEGE", title="Penambahan Modal", key=None):
+    ann = Announcement(
+        id=key or (emiten + title),
+        emiten=emiten,
+        title=title,
+        published="2026-07-01T10:00:00",
+    )
+    store.record_alert(ann, "Penambahan Modal")
+    return ann
+
+
+def test_history_record_and_recent(tmp_path):
+    s = HistoryStore(str(tmp_path / "h.db"))
+    _rec(s, emiten="PEGE", key="a")
+    _rec(s, emiten="BBRI", key="b")
+    recent = s.recent(10)
+    assert len(recent) == 2
+    assert {r["emiten"] for r in recent} == {"PEGE", "BBRI"}
+    assert s.count_total() == 2
+    s.close()
+
+
+def test_history_dedupes_by_key(tmp_path):
+    s = HistoryStore(str(tmp_path / "h.db"))
+    _rec(s, key="same")
+    _rec(s, key="same")  # INSERT OR IGNORE -> tidak dobel
+    assert s.count_total() == 1
+    s.close()
+
+
+def test_history_top_emiten_aggregation(tmp_path):
+    s = HistoryStore(str(tmp_path / "h.db"))
+    _rec(s, emiten="PEGE", key="a")
+    _rec(s, emiten="PEGE", key="b")
+    _rec(s, emiten="BBRI", key="c")
+    top = s.top_emiten(10)
+    assert top[0]["emiten"] == "PEGE" and top[0]["n"] == 2
+    s.close()
+
+
+def test_history_survives_reopen(tmp_path):
+    p = str(tmp_path / "h.db")
+    s = HistoryStore(p)
+    _rec(s, key="a")
+    s.close()
+    s2 = HistoryStore(p)  # buka ulang file yang sama
+    assert s2.count_total() == 1
+    s2.close()
+
+
+# -- SSE broadcaster --------------------------------------------------------
+from idxbot.events import EventBroadcaster, format_sse
+
+
+def test_broadcaster_delivers_to_subscribers():
+    b = EventBroadcaster()
+    q1 = b.subscribe()
+    q2 = b.subscribe()
+    assert b.subscriber_count == 2
+    b.publish("alert", {"emiten": "PEGE"})
+    assert q1.get_nowait()["data"]["emiten"] == "PEGE"
+    assert q2.get_nowait()["data"]["emiten"] == "PEGE"
+    b.unsubscribe(q1)
+    assert b.subscriber_count == 1
+
+
+def test_broadcaster_drops_oldest_when_full():
+    b = EventBroadcaster()
+    q = b.subscribe()
+    # Isi melebihi kapasitas; publish tidak boleh melempar, event tertua dibuang.
+    for i in range(200):
+        b.publish("alert", {"i": i})
+    # Antrian tidak melampaui cap; event terbaru tetap ada.
+    drained = []
+    while not q.empty():
+        drained.append(q.get_nowait())
+    assert len(drained) <= 100
+    assert drained[-1]["data"]["i"] == 199
+
+
+def test_format_sse_frame():
+    frame = format_sse("alert", {"emiten": "PEGE"})
+    assert frame.startswith("event: alert\n")
+    assert 'data: {"emiten": "PEGE"}' in frame
+    assert frame.endswith("\n\n")
+
+
+# -- freshness gate (realtime seperti web) ----------------------------------
+from datetime import timedelta, timezone as _tzz
+
+from idxbot.poller import Poller
+
+
+class _FakeScraper:
+    """Scraper palsu: kembalikan baris feed tetap, catat PDF yang diunduh."""
+
+    def __init__(self, rows):
+        self._rows = rows
+
+    def fetch_announcements(self):
+        return [Announcement.from_idx_row(r) for r in self._rows]
+
+    def download_pdf(self, url, dest, max_bytes):
+        return False  # tak ada PDF -> jalur link-only
+
+
+def _poller_for_gate(tmp_path, max_age_minutes, now_wib):
+    cfg = _valid_config(
+        filter=FilterConfig(keywords=[], emiten=[], max_age_minutes=max_age_minutes),
+    )
+    p = Poller(cfg, seen_path=str(tmp_path / "seen.json"))
+    p._prime_done = True          # lewati fase prime
+    p._hw_needs_init = False
+    sent = []
+    p._notifier.send = lambda ann, match, pdf: (sent.append(ann.emiten) or True)
+    # now_local deterministik (WIB aware) agar cutoff bisa diprediksi.
+    p._schedule.now_local = lambda: now_wib
+    return p, sent
+
+
+def _row(idpub, emiten, published):
+    return {"pengumuman": {"Id2": idpub, "Kode_Emiten": emiten,
+                           "JudulPengumuman": "Aksi Korporasi", "TglPengumuman": published}}
+
+
+def test_freshness_gate_skips_stale_sends_fresh(tmp_path):
+    now = datetime(2026, 7, 3, 9, 0, 0, tzinfo=_tzz(timedelta(hours=7)))
+    p, sent = _poller_for_gate(tmp_path, max_age_minutes=60, now_wib=now)
+    rows = [
+        _row("fresh", "PEGE", "2026-07-03T08:50:00"),   # 10 mnt lalu -> kirim
+        _row("stale", "BBRI", "2026-07-02T21:16:00"),   # semalam -> lewati
+    ]
+    p._poll_once(_FakeScraper(rows))
+    assert sent == ["PEGE"]  # hanya yang segar
+
+
+def test_freshness_gate_disabled_sends_all(tmp_path):
+    now = datetime(2026, 7, 3, 9, 0, 0, tzinfo=_tzz(timedelta(hours=7)))
+    p, sent = _poller_for_gate(tmp_path, max_age_minutes=0, now_wib=now)
+    rows = [
+        _row("fresh", "PEGE", "2026-07-03T08:50:00"),
+        _row("stale", "BBRI", "2026-07-02T21:16:00"),
+    ]
+    p._poll_once(_FakeScraper(rows))
+    assert set(sent) == {"PEGE", "BBRI"}  # gate mati -> semua terkirim
+
+
+def test_freshness_gate_unparseable_time_passes(tmp_path):
+    """Item tanpa waktu terparse tetap dikirim (default aman: jangan hilang)."""
+    now = datetime(2026, 7, 3, 9, 0, 0, tzinfo=_tzz(timedelta(hours=7)))
+    p, sent = _poller_for_gate(tmp_path, max_age_minutes=60, now_wib=now)
+    rows = [_row("notime", "XXXX", "-")]  # published "-" -> published_dt None
+    p._poll_once(_FakeScraper(rows))
+    assert sent == ["XXXX"]

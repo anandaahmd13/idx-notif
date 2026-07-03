@@ -37,12 +37,22 @@ class ScheduleConfig:
     market_close: str = "15:00"
     # Hari aktif bursa: 0=Senin ... 6=Minggu. Default Senin-Jumat.
     weekdays: list[int] = field(default_factory=lambda: [0, 1, 2, 3, 4])
+    # Bila True, abaikan jendela/hari bursa: polling SELALU pakai interval cepat
+    # (market_interval_seconds) 24 jam. Untuk pemantauan "realtime" penuh — sadar
+    # bahwa ini menaikkan risiko ditantang Cloudflare di luar jam sibuk.
+    always_open: bool = False
 
 
 @dataclass
 class FilterConfig:
     keywords: list[str] = field(default_factory=list)
     emiten: list[str] = field(default_factory=list)
+    # Gerbang kesegaran (menit): hanya alert pengumuman yang terbit dalam
+    # rentang ini dari "sekarang". 0 = mati (kirim semua yang lolos high-water,
+    # termasuk backlog saat bot baru dinyalakan). >0 = "realtime seperti web":
+    # backlog lama dilewati diam-diam (tetap ditandai seen), hanya yang benar-
+    # benar baru yang dikirim. Item tanpa waktu terparse tetap dikirim (aman).
+    max_age_minutes: int = 0
 
 
 @dataclass
@@ -59,12 +69,38 @@ class DownloadConfig:
 
 
 @dataclass
+class WebConfig:
+    # Halaman status/monitoring. Default mati agar tidak ada port terbuka
+    # tanpa sengaja. Di VPS publik, batasi host ke 127.0.0.1 lalu akses via
+    # SSH tunnel — halaman ini tanpa autentikasi.
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = 8080
+
+
+@dataclass
+class DashboardConfig:
+    # Dashboard FastAPI (feed realtime via SSE + chart). Berbeda dari `web`
+    # (status stdlib zero-dep): dashboard butuh fastapi/uvicorn dan menjalankan
+    # poll loop di dalam prosesnya sendiri (jalankan via `python -m idxbot.app`).
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = 8000
+    db_path: str = "data/history.db"
+    # Kredensial Basic Auth diambil dari env DASHBOARD_USER / DASHBOARD_PASS.
+    # Bila host bukan 127.0.0.1/localhost dan kredensial kosong -> refuse start.
+    recent_limit: int = 50
+
+
+@dataclass
 class Config:
     poll: PollConfig
     schedule: ScheduleConfig
     filter: FilterConfig
     telegram: TelegramConfig
     download: DownloadConfig
+    web: WebConfig
+    dashboard: DashboardConfig
 
     @classmethod
     def load(cls, path: str | os.PathLike | None = None) -> "Config":
@@ -97,6 +133,8 @@ class Config:
         schedule = _section("schedule", ScheduleConfig)
         flt = _section("filter", FilterConfig)
         dl = _section("download", DownloadConfig)
+        web = _section("web", WebConfig)
+        dashboard = _section("dashboard", DashboardConfig)
 
         tg_raw = raw.get("telegram") or {}
         telegram = TelegramConfig(
@@ -106,7 +144,8 @@ class Config:
         )
 
         cfg = cls(
-            poll=poll, schedule=schedule, filter=flt, telegram=telegram, download=dl
+            poll=poll, schedule=schedule, filter=flt, telegram=telegram,
+            download=dl, web=web, dashboard=dashboard,
         )
         cfg.validate()
         return cfg
@@ -118,6 +157,8 @@ class Config:
             raise ConfigError("TELEGRAM_BOT_TOKEN looks malformed (expected '<id>:<secret>').")
         if not self.telegram.chat_id:
             raise ConfigError("TELEGRAM_CHAT_ID is not set (see .env.example).")
+        if self.filter.max_age_minutes < 0:
+            raise ConfigError("filter.max_age_minutes must be >= 0 (0 = disabled).")
         if self.poll.market_interval_seconds < 3:
             raise ConfigError("poll.market_interval_seconds must be >= 3 to avoid rate-limiting.")
         if self.poll.off_interval_seconds < self.poll.market_interval_seconds:
@@ -151,3 +192,9 @@ class Config:
                 raise ConfigError(f"{label} must be 'HH:MM' (24h), got {value!r}.")
         if parsed["schedule.market_open"] >= parsed["schedule.market_close"]:
             raise ConfigError("schedule.market_open must be earlier than market_close.")
+        if not (1 <= self.web.port <= 65535):
+            raise ConfigError("web.port must be between 1 and 65535.")
+        if not (1 <= self.dashboard.port <= 65535):
+            raise ConfigError("dashboard.port must be between 1 and 65535.")
+        if self.dashboard.recent_limit < 1:
+            raise ConfigError("dashboard.recent_limit must be >= 1.")

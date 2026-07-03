@@ -31,6 +31,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true", help="Validate config + Telegram, then exit.")
     parser.add_argument("--once", action="store_true", help="Run one poll cycle and exit.")
     parser.add_argument("--no-ping", action="store_true", help="Skip the startup Telegram ping.")
+    parser.add_argument("--web", action="store_true", help="Force-enable the status web page.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Debug logging.")
     args = parser.parse_args(argv)
 
@@ -50,7 +51,21 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if ok else 1
 
     seen_path = os.getenv("IDX_SEEN_PATH", "seen.json")
-    poller = Poller(cfg, seen_path=seen_path)
+
+    # Halaman status opsional: aktif bila web.enabled di config atau flag --web.
+    stats = None
+    if cfg.web.enabled or args.web:
+        from .stats import BotStats
+        from .web import start_status_server
+
+        stats = BotStats()
+        try:
+            start_status_server(stats, cfg.web.host, cfg.web.port)
+        except OSError as exc:
+            log.error("Gagal start halaman status di %s:%d — %s", cfg.web.host, cfg.web.port, exc)
+            return 2
+
+    poller = Poller(cfg, seen_path=seen_path, stats=stats)
 
     if not args.no_ping:
         TelegramNotifier(cfg.telegram).send_startup_ping()

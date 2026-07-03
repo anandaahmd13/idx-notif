@@ -117,6 +117,79 @@ docker compose logs -f
 State persists in `./data/seen.json`; edit `config.yaml` and
 `docker compose restart` to change filters without a rebuild.
 
+### Status / monitoring page (optional)
+
+A lightweight web page shows the bot's live health — uptime, last poll, alerts
+sent, consecutive failures, last error. It runs on a daemon thread inside the
+same process (no extra Chromium), using only the stdlib (no Flask).
+
+Enable it in `config.yaml`:
+
+```yaml
+web:
+  enabled: true
+  host: "127.0.0.1"   # keep local on a public VPS; use "0.0.0.0" only behind a firewall
+  port: 8080
+```
+
+Or force it on for one run with `python -m idxbot --web`.
+
+Endpoints:
+
+- `GET /` — HTML status page (auto-refreshes every 5s).
+- `GET /api/status` — JSON snapshot of the metrics.
+- `GET /healthz` — `200` when healthy, `503` when not (for uptime monitors /
+  Docker healthchecks).
+
+> **No authentication.** The page exposes only non-sensitive metrics (no token
+> or chat id), but on a public VPS bind to `127.0.0.1` and reach it via an SSH
+> tunnel (`ssh -L 8080:127.0.0.1:8080 user@vps`), or put it behind a firewall.
+> To expose it from Docker, uncomment the `ports` / `healthcheck` block in
+> `docker-compose.yml`.
+
+### Realtime dashboard (optional)
+
+A full dashboard shows a **live announcement feed** (pushed the moment an alert
+is sent, via Server-Sent Events), plus stat tiles and history charts (alerts per
+day, top emiten). Built on FastAPI + Jinja2 + Tailwind + Chart.js — dark OLED
+theme, no build step. Announcement history is stored in **SQLite** (`data/history.db`),
+additive to `seen.json` (dedupe/high-water logic is untouched).
+
+> **This runs its own poll loop.** Run *either* the Telegram-only bot
+> (`python -m idxbot`) *or* the dashboard (`python -m idxbot.app`) — not both,
+> or you get two browsers and duplicate Telegram alerts. The dashboard sends
+> Telegram alerts too.
+
+Enable and run:
+
+```yaml
+# config.yaml
+dashboard:
+  enabled: true
+  host: "127.0.0.1"   # public bind (0.0.0.0) REQUIRES auth — see below
+  port: 8000
+```
+
+```bash
+python -m idxbot.app          # starts poller + dashboard on http://127.0.0.1:8000
+```
+
+**Authentication (Basic Auth).** Set credentials in `.env`:
+
+```bash
+DASHBOARD_USER=admin
+DASHBOARD_PASS=a-strong-password
+```
+
+The browser shows a native login prompt. If `dashboard.host` is **not**
+loopback and these are unset, the app **refuses to start** — so a public
+deployment is never accidentally open. On localhost, auth is optional (reach it
+via `ssh -L 8000:127.0.0.1:8000 user@vps`).
+
+Endpoints: `GET /` (dashboard), `/api/status`, `/api/alerts`, `/api/charts`,
+`/events` (SSE stream), `/healthz` (no auth). To run in Docker, uncomment the
+`dashboard` service in `docker-compose.yml` (and stop the `idxbot` service).
+
 ### Locally
 
 ```bash

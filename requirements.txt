@@ -4,3 +4,9 @@ playwright>=1.55,<2
 requests==2.32.3
 PyYAML==6.0.1
 python-dotenv==1.0.1
+
+# Dashboard web (opsional): FastAPI + uvicorn + Jinja2. SSE dilayani lewat
+# StreamingResponse bawaan, jadi tidak perlu paket SSE terpisah.
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+jinja2>=3.1,<4

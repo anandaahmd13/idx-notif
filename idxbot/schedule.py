@@ -25,6 +25,7 @@ class MarketSchedule:
         self._open = _parse_hhmm(schedule.market_open)
         self._close = _parse_hhmm(schedule.market_close)
         self._weekdays = set(schedule.weekdays)
+        self._always_open = schedule.always_open
         self._market_interval = poll.market_interval_seconds
         self._off_interval = poll.off_interval_seconds
 
@@ -33,6 +34,8 @@ class MarketSchedule:
         return datetime.now(timezone.utc).astimezone(self._tz)
 
     def is_market_open(self, at: datetime | None = None) -> bool:
+        if self._always_open:
+            return True
         now = at or self.now_local()
         if now.weekday() not in self._weekdays:
             return False
